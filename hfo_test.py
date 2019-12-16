@@ -26,8 +26,8 @@ def gen_pact():
     ACTION_SIZE = len(pacts)
 
 
-def plot(y_list):
-    x = np.linspace(0,200,200)
+def plot(y_list, episode):
+    x = np.linspace(0,episode,episode)
     y = y_list
     plt.plot(x, y, label="reward")
     # 凡例の表示
@@ -146,14 +146,14 @@ class HFO(hfo_py.HFOEnvironment):
     def _step(self, action):
         if ACTION_LIST[action][0] != hfo_py.TURN:
             self.act(ACTION_LIST[action][0], ACTION_LIST[1], ACTION_LIST[2])
-            if ACTION_LIST[action][0] == hfo_py.DASH:
-                print("action_num:{0}  action:DASH  speed:{1}  degree:{2}".format(action, ACTION_LIST[action][1], ACTION_LIST[action][2]))
-            else:
-                print("action_num{0}  action:KICK  power:{1}  degree:{2}".format(action, ACTION_LIST[action][1], ACTION_LIST[action][2]))
+            #if ACTION_LIST[action][0] == hfo_py.DASH:
+            #    print("action_num:{0}  action:DASH  speed:{1}  degree:{2}".format(action, ACTION_LIST[action][1], ACTION_LIST[action][2]))
+            #else:
+            #    print("action_num{0}  action:KICK  power:{1}  degree:{2}".format(action, ACTION_LIST[action][1], ACTION_LIST[action][2]))
 
         else:
             self.act(ACTION_LIST[action][0], ACTION_LIST[1])
-            print("action_num]{0}  action:TURN  degree:{1}".format(action, ACTION_LIST[1]))
+            #print("action_num]{0}  action:TURN  degree:{1}".format(action, ACTION_LIST[1]))
 
         self.state = self.getState()
         self.status = self.step()
@@ -235,7 +235,7 @@ class HFO(hfo_py.HFOEnvironment):
 
 # TODO : パラメーター化されたアクションに対応させる
 def main():
-    num_episodes = 200 # 総試行回数
+    max_episodes = 20000 # 総試行回数
     max_timestep = 15000
     num_consecutive_iterations = 10  # 学習完了評価の平均計算を行う試行回数
     ep_reward = []
@@ -254,7 +254,7 @@ def main():
     mainQN = dqn.QNetwork(lr=learning_rate, s_size=STATE_SIZE, a_size=ACTION_SIZE)
     targetQN = dqn.QNetwork(lr=learning_rate, s_size=STATE_SIZE, a_size=ACTION_SIZE)
     memory = dqn.Memory(max_size=memory_size)
-    actor = dqn.Actor(ACTION_SIZE)
+    actor = dqn.Actor(ACTION_SIZE, max_episodes=max_episodes)
 
     hfo = HFO()
     hfo.start_server()
@@ -262,7 +262,7 @@ def main():
     hfo.render()
 
     # エピソードのループ
-    for episode in range(num_episodes):
+    for episode in range(max_episodes):
         state, reward, status = hfo._step(np.random.choice([i for i in range(ACTION_SIZE)]))
         state = np.reshape(state, [1, STATE_SIZE])
         episode_reward = 0
@@ -290,14 +290,11 @@ def main():
                 break
         ep_reward.append(episode_reward)
         print("episode:{0}, total_reward:{1}".format(episode, episode_reward))
+        if episode % 200 == 0 and episode != 0:
+            print(episode,len(ep_reward))
+            plot(ep_reward, episode+1)
     hfo.close()
-    plot(ep_reward)
 
-"""
-DQNの実装
-状態数12、行動３、ハイパラメーターどうする？
-実装で使うフレームワーク：Pytorch
-"""
 
 if __name__ == "__main__":
     main()

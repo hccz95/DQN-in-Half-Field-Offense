@@ -1,6 +1,16 @@
 from __future__ import absolute_import, division, print_function, unicode_literals
 
 import tensorflow as tf
+from tensorflow.python.client import device_lib
+print(device_lib.list_local_devices())
+
+config = tf.ConfigProto(
+    gpu_options=tf.GPUOptions(
+        visible_device_list="0", # specify GPU number
+        allow_growth=True
+    )
+)
+sess = tf.Session(config=config)
 import numpy as np
 import collections
 import hfo_py
@@ -14,14 +24,29 @@ def huber_loss(y_true, y_pred):
     loss = tf.where(cond, L2, L1)
     return tf.keras.backend.mean(loss)
 
+def action_wrap(action, ACTION_LIST):
+    gym_action = [0, 0, 0, 0, 0, 0]
+
+    if ACTION_LIST[action][0] == hfo_py.DASH:
+        gym_action[0] = 0
+        gym_action[1] = ACTION_LIST[action][1]
+        gym_action[2] = ACTION_LIST[action][2]
+    elif ACTION_LIST[action][0] == hfo_py.TURN:
+        gym_action[0] = 1
+        gym_action[3] = ACTION_LIST[action][1]
+    elif ACTION_LIST[action][0]== hfo_py.KICK:
+        gym_action[0] = 2
+        gym_action[4] = ACTION_LIST[action][1]
+        gym_action[5] = ACTION_LIST[action][2]
+    return gym_action
 
 class QNetwork:
-    def __init__(self, lr=0.01, s_size=59, a_size=3, hidden_size=[1024, 1024, 1024, 1024]):
+    def __init__(self, lr=0.01, s_size=59, a_size=3, hidden_size=1024):
         self.model = tf.keras.models.Sequential()
-        self.model.add(tf.keras.layers.Dense(hidden_size[0], activation='relu', input_dim=s_size))
-        self.model.add(tf.keras.layers.Dense(hidden_size[1], activation='relu'))
-        self.model.add(tf.keras.layers.Dense(hidden_size[2], activation='relu'))
-        self.model.add(tf.keras.layers.Dense(hidden_size[3], activation='relu'))
+        self.model.add(tf.keras.layers.Dense(hidden_size, activation='relu', input_dim=s_size))
+        self.model.add(tf.keras.layers.Dense(hidden_size/2, activation='relu', input_dim=s_size))
+        self.model.add(tf.keras.layers.Dense(hidden_size/4, activation='relu', input_dim=s_size))
+        self.model.add(tf.keras.layers.Dense(hidden_size/8, activation='relu', input_dim=s_size))
         self.model.add(tf.keras.layers.Dense(a_size, activation='linear'))
         self.optimizer = tf.keras.optimizers.Adam(lr=lr)
         self.model.compile(loss=huber_loss,optimizer=self.optimizer)
@@ -65,21 +90,28 @@ class Memory:
 
 
 class Actor:
-    def __init__(self, action_size):
+    def __init__(self, action_size, max_episodes):
         self.action_size = action_size
         self.epsilon = 0.9
         self.decay = 0.999
         self.min_epsilon = 0.05
         self.old_episode = None
+        self.max_episodes = max_episodes
 
     def get_action(self, state, episode, mainQN):   # [C]ｔ＋１での行動を返す
-        if self.old_episode != episode:
-            for i in range(episode):
-                self.epsilon = max(self.min_epsilon, self.epsilon * self.decay)
-            print("epsilon:{}".format(self.epsilon))
+        #if self.old_episode != episode:
+        #    for i in range(episode):
+        #        self.epsilon = max(self.min_epsilon, self.epsilon * self.decay)
+        #    print("epsilon:{}".format(self.epsilon))
+        #epsilon = 0.001 + 0.9 / (1.0+episode*0.005)
 
-        #epsilon = 0.001 + 0.9 / (1.0+episode)
-        if self.epsilon <= np.random.uniform(0, 1):
+        # max_episodes以上で0.1になるようにする
+        if episode <= self.max_episodes:
+            epsilon = 1 - 0.9/self.max_episodes*episode
+        elif episode > self.max_episodes:
+            epsilon = 0.1
+
+        if epsilon <= np.random.uniform(0, 1):
             retTargetQs = mainQN.model.predict(state)[0]
             action = np.argmax(retTargetQs)  # 最大の報酬を返す行動を選択する
         else:

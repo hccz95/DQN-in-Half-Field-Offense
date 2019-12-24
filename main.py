@@ -8,6 +8,7 @@ import math
 from contextlib import closing
 import gym
 import gym_soccer
+from gym.wrappers import Monitor
 
 # 行動リストと大きさ、状態の大きさ
 ACTION_LIST = [hfo_py.MOVE, hfo_py.DRIBBLE, hfo_py.SHOOT, hfo_py.REDUCE_ANGLE_TO_GOAL, hfo_py.GO_TO_BALL]
@@ -261,16 +262,17 @@ def compute_n_step_returns(episode_transitions, gamma):
 # TODO : パラメーター化されたアクションに対応させる
 def main():
     global unum
-    max_episodes = 1000000 # 総試行回数
+    max_episodes = 10000 # 総試行回数
     max_timestep = 15000
     num_consecutive_iterations = 10  # 学習完了評価の平均計算を行う試行回数
+    total_reward_vec = np.zeros(num_consecutive_iterations)  # 各試行の報酬を格納
     ep_reward = []
     gamma = 0.99  # 割引係数
     islearned = 0  # 学習が終わったフラグ
 
     hidden_size = 100  # Q-networkの隠れ層のニューロンの数
     learning_rate = 0.00001  # Q-networkの学習係数
-    memory_size = 10000  # バッファーメモリの大きさ
+    memory_size = 100000  # バッファーメモリの大きさ
     batch_size = 32  # Q-networkを更新するバッチの大記載
 
     # pact生成
@@ -280,9 +282,12 @@ def main():
     mainQN = dqn.QNetwork(lr=learning_rate, s_size=STATE_SIZE, a_size=ACTION_SIZE)
     targetQN = dqn.QNetwork(lr=learning_rate, s_size=STATE_SIZE, a_size=ACTION_SIZE)
     memory = dqn.Memory(max_size=memory_size)
+    memory_TDerror = dqn.Memory_TDerror(max_size=memory_size)
     actor = dqn.Actor(ACTION_SIZE, max_episodes=max_episodes)
 
     env = gym.make('SoccerScoreGoal-v0')
+    #dir = os.path.join("results/soccer","DQN")
+    #env = Monitor(env, directory=os.path.join(dir, str(0)), video_callable=False, write_upon_reset=False, force=True)
 
     # エピソードのループ
     for episode in range(max_episodes):
@@ -294,7 +299,6 @@ def main():
 
         state = np.reshape(state, [1, STATE_SIZE])
         episode_reward = 0
-        targetQN.model.set_weights(mainQN.model.get_weights())
         # タイムステップをどのくらい取るのか
         for timestep in range(max_timestep):
             action = actor.get_action(state, episode, mainQN)
@@ -302,25 +306,36 @@ def main():
             next_state = np.reshape(state, [1, STATE_SIZE])
 
             memory.add((state, action, reward, next_state))  # メモリの更新する
+
+            # TD誤差の更新
+            TDerror = memory_TDerror.get_TDerror(memory, gamma, mainQN, targetQN)
+            memory_TDerror.add(TDerror)
             state = next_state  # 状態更新
 
             # Qネットワークの重みを学習・更新する replay
             if (memory.len() % batch_size == 0) and not islearned:
-                mainQN.replay(memory, batch_size, gamma, targetQN)
+                mainQN.pioritized_experience_replay(memory, batch_size, gamma, targetQN, memory_TDerror)
 
-            targetQN.model.set_weights(mainQN.model.get_weights())
+            targetQN = mainQN
+
+            if terminal:
+                # [※p6]TD誤差のメモリを最新に計算しなおす
+                targetQN = mainQN  # 行動決定と価値計算のQネットワークをおなじにする
+                memory_TDerror.update_TDerror(memory, gamma, mainQN, targetQN)
+
+                total_reward_vec = np.hstack((total_reward_vec[1:], episode_reward))  # 報酬を記録
+                print('%d Episode finished after %d time steps / mean %f' % (episode, timestep + 1, total_reward_vec.mean()))
+                break
+
             episode_reward += reward
-            env.render()
+            #env.render()
 
             if timestep % 100 == 0 and timestep != 0:
                 print("timestep%d"%(timestep))
 
-            if terminal:
-                break
-
         ep_reward.append(episode_reward)
-        print("episode:{0}, total_reward:{1}".format(episode, episode_reward))
-        if episode % 5000 == 0 and episode != 0:
+        #print("episode:{0}, total_reward:{1}".format(episode, episode_reward))
+        if episode % 100 == 0 and episode != 0:
             print(episode, len(ep_reward))
             plot(ep_reward, episode+1)
     env.close()

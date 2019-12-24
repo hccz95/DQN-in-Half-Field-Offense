@@ -70,8 +70,44 @@ class QNetwork:
             targets[i] = self.model.predict(state_b)    # Qネットワークの出力
             targets[i][action_b] = target               # 教師信号
 
-        # shiglayさんよりアドバイスいただき、for文の外へ修正しました
-        self.model.fit(inputs, targets, epochs=1, verbose=0)  # ep
+            # shiglayさんよりアドバイスいただき、for文の外へ修正しました
+            self.model.fit(inputs, targets, epochs=1, verbose=0)  # ep
+
+    # [※p1] 優先順位付き経験再生で重みの学習
+    def pioritized_experience_replay(self, memory, batch_size, gamma, targetQN, memory_TDerror):
+
+        # 0からTD誤差の絶対値和までの一様乱数を作成(昇順にしておく)
+        sum_absolute_TDerror = memory_TDerror.get_sum_absolute_TDerror()
+        generatedrand_list = np.random.uniform(0, sum_absolute_TDerror, batch_size)
+        generatedrand_list = np.sort(generatedrand_list)
+
+        # [※p2]作成した乱数で串刺しにして、バッチを作成する
+        batch_memory = Memory(max_size=batch_size)
+        idx = 0
+        tmp_sum_absolute_TDerror = 0
+        for (i, randnum) in enumerate(generatedrand_list):
+            while tmp_sum_absolute_TDerror < randnum:
+                tmp_sum_absolute_TDerror += abs(memory_TDerror.buffer[idx]) + 0.0001
+                idx += 1
+
+            batch_memory.add(memory.buffer[idx])
+
+        # あとはこのバッチで学習する
+        inputs = np.zeros((batch_size, self.s_size))
+        targets = np.zeros((batch_size, self.a_size))
+        for i, (state_b, action_b, reward_b, next_state_b) in enumerate(batch_memory.buffer):
+            inputs[i:i + 1] = state_b
+            target = reward_b
+
+            if not (next_state_b == np.zeros(state_b.shape)).all(axis=1):
+                # 価値計算（DDQNにも対応できるように、行動決定のQネットワークと価値観数のQネットワークは分離）
+                retmainQs = self.model.predict(next_state_b)[0]
+                next_action = np.argmax(retmainQs)  # 最大の報酬を返す行動を選択する
+                target = reward_b + gamma * targetQN.model.predict(next_state_b)[0][next_action]
+
+            targets[i] = self.model.predict(state_b)  # Qネットワークの出力
+            targets[i][action_b] = target  # 教師信号
+            self.model.fit(inputs, targets, epochs=1, verbose=0)  # epochsは訓練データの反復回数、verbose=0は表示なしの設定
 
 
 class Memory:
@@ -87,6 +123,41 @@ class Memory:
 
     def len(self):
         return len(self.buffer)
+
+# [※p3] Memoryクラスを継承した、TD誤差を格納するクラスです
+class Memory_TDerror(Memory):
+    def __init__(self, max_size=1000):
+        super().__init__(max_size)
+
+    # add, sample, len は継承されているので定義不要
+
+    # TD誤差を取得
+    def get_TDerror(self, memory, gamma, mainQN, targetQN):
+        (state, action, reward, next_state) = memory.buffer[memory.len() - 1]   #最新の状態データを取り出す
+        # 価値計算（DDQNにも対応できるように、行動決定のQネットワークと価値観数のQネットワークは分離）
+        next_action = np.argmax(mainQN.model.predict(next_state)[0])  # 最大の報酬を返す行動を選択する
+        target = reward + gamma * targetQN.model.predict(next_state)[0][next_action]
+        TDerror = target - targetQN.model.predict(state)[0][action]
+        return TDerror
+
+    # TD誤差をすべて更新
+    def update_TDerror(self, memory, gamma, mainQN, targetQN):
+        for i in range(0, (self.len() - 1)):
+            (state, action, reward, next_state) = memory.buffer[i]  # 最新の状態データを取り出す
+            # 価値計算（DDQNにも対応できるように、行動決定のQネットワークと価値観数のQネットワークは分離）
+            next_action = np.argmax(mainQN.model.predict(next_state)[0])  # 最大の報酬を返す行動を選択する
+            target = reward + gamma * targetQN.model.predict(next_state)[0][next_action]
+            TDerror = target - targetQN.model.predict(state)[0][action]
+            self.buffer[i] = TDerror
+
+    # TD誤差の絶対値和を取得
+    def get_sum_absolute_TDerror(self):
+        sum_absolute_TDerror = 0
+        for i in range(0, (self.len() - 1)):
+            sum_absolute_TDerror += abs(self.buffer[i]) + 0.0001  # 最新の状態データを取り出す
+
+        return sum_absolute_TDerror
+
 
 
 class Actor:
